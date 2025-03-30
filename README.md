@@ -1,6 +1,6 @@
 # SSH Access for Jupyter Notebooks
 
-This repository provides a one-line solution for setting up SSH access in Jupyter notebooks and other restricted environments where you don't have sudo privileges.
+This repository provides a one-line solution for setting up SSH access in Jupyter notebooks and other restricted environments, with special support for terminal access and Python 3.6+ compatibility.
 
 ## One-Line Solution
 
@@ -14,26 +14,38 @@ Copy and paste this single line into your Jupyter notebook cell to set up comple
 
 This solution will:
 
-1. Generate SSH keys if they don't exist
+1. Generate SSH keys automatically
 2. Set up proper SSH configuration
-3. Download and install SSHX for tunneling capabilities
-4. Test connectivity to GitHub
-5. Provide instructions for using SSH and SSHX
+3. Create terminal access scripts
+4. Set up Git with your SSH key
+5. Create SSH tunneling capabilities
+6. Provide detailed instructions
 
-## Features
+## Key Features
 
-- Works in environments without sudo/root access
-- Creates SSH keys non-interactively
-- Sets proper permissions on all SSH files
-- Installs SSHX for advanced tunneling capabilities
-- Works in Jupyter notebooks, Dataiku, Google Colab, etc.
-- Provides clear instructions for common SSH tasks
+- **Python 3.6+ Compatible**: Works with older Python versions
+- **No External Dependencies**: Uses only standard library modules
+- **Terminal Access**: Creates scripts for direct terminal access
+- **Multiple Terminal Methods**: Tries several methods to provide terminal access
+- **SSH Tunneling**: Pure Python implementation of SSH tunneling
+- **No sudo Required**: Works without elevated privileges
+- **Git Integration**: Configures Git to use your SSH keys
 
-## Usage Examples
+## Getting a Terminal
 
-After running the one-liner above, you'll have several capabilities:
+After running the one-liner, you'll get a script you can run:
 
-### Basic SSH
+```python
+# Start a terminal service
+!python3 ~/start_terminal.py
+```
+
+This will:
+1. Try multiple terminal services (ttyd, shellinabox, sshd)
+2. If available, start a web-based or SSH terminal
+3. If not, provide a Python-based fallback terminal
+
+## SSH Commands
 
 ```python
 # Connect to a server
@@ -46,28 +58,25 @@ After running the one-liner above, you'll have several capabilities:
 !scp username@hostname:/path/file.txt ./
 ```
 
-### Git with SSH
+## Git with SSH
 
 ```python
 # Clone a private repository
 !git clone git@github.com:username/repo.git
+
+# Clone with explicit key specification
+!GIT_SSH_COMMAND="ssh -i ~/.ssh/id_rsa" git clone git@github.com:username/repo.git
 ```
 
-### SSHX Tunneling
+## SSH Tunneling
 
 ```python
-# Create a new tunnel
-!~/bin/sshx create --name my-tunnel
-
-# Connect to a tunnel
-!~/bin/sshx connect my-tunnel
-
-# Allow reverse connections to your notebook
-!~/bin/sshx serve --port 8022
+# Create a tunnel forwarding local port 8080 to example.com:80
+!python3 ~/ssh_tunnel.py 8080 example.com 80
 ```
 
 ## Security Notes
 
-- The generated SSH key has no passphrase for automation purposes
-- SSH StrictHostKeyChecking is disabled by default for ease of use
-- Consider adjusting these settings for production use
+- SSH keys are generated without a passphrase for automation
+- StrictHostKeyChecking is disabled by default
+- Consider enhancing security for production use
