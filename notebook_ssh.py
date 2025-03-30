@@ -2,7 +2,7 @@
 """
 One-line SSH access solution for notebook environments.
 This script sets up an SSH environment without requiring sudo,
-creates keys, and enables tunneling capabilities.
+creates keys, and enables terminal access via various methods.
 """
 
 import os
@@ -17,7 +17,6 @@ import socket
 import time
 from pathlib import Path
 import urllib.request
-import json
 import getpass
 
 # ANSI Colors for pretty output
@@ -102,14 +101,14 @@ def generate_ssh_key():
     print("Generating new SSH key...")
     try:
         # Generate key non-interactively
-        subprocess.run([
+        subprocess.call([
             'ssh-keygen', 
             '-t', 'rsa',
             '-b', '4096',
             '-C', f"{getpass.getuser()}@{socket.gethostname()}",
             '-f', key_file,
             '-N', ''  # Empty passphrase
-        ], check=True)
+        ])
         
         # Set permissions
         os.chmod(key_file, 0o600)
@@ -121,60 +120,6 @@ def generate_ssh_key():
             print(f"\nPublic key: {GREEN}{pub_key}{RESET}\n")
     except Exception as e:
         print(f"{RED}Failed to generate SSH key: {str(e)}{RESET}")
-
-def install_sshx():
-    """Install SSHX for tunneling capabilities"""
-    sshx_path = os.path.join(BIN_DIR, 'sshx')
-    
-    if os.path.exists(sshx_path):
-        print(f"{YELLOW}SSHX already installed at {sshx_path}{RESET}")
-        try:
-            version = subprocess.check_output([sshx_path, '--version'], text=True).strip()
-            print(f"{GREEN}SSHX version: {version}{RESET}")
-        except:
-            print(f"{YELLOW}Could not determine SSHX version{RESET}")
-        return
-    
-    # Detect architecture and download appropriate version
-    arch = platform.machine()
-    if arch == 'x86_64':
-        url = "https://s3.amazonaws.com/sshx/sshx-x86_64-unknown-linux-musl.tar.gz"
-    elif arch == 'aarch64':
-        url = "https://s3.amazonaws.com/sshx/sshx-aarch64-unknown-linux-musl.tar.gz"
-    else:
-        print(f"{RED}Unsupported architecture: {arch}{RESET}")
-        return
-    
-    # Download sshx
-    tmp_dir = tempfile.mkdtemp()
-    tar_path = os.path.join(tmp_dir, 'sshx.tar.gz')
-    
-    if download_file(url, tar_path):
-        try:
-            # Extract the tar file
-            subprocess.run(['tar', '-xzf', tar_path, '-C', tmp_dir], check=True)
-            
-            # Move sshx to bin directory
-            extracted_sshx = os.path.join(tmp_dir, 'sshx')
-            if os.path.exists(extracted_sshx):
-                os.rename(extracted_sshx, sshx_path)
-                os.chmod(sshx_path, 0o755)
-                print(f"{GREEN}Installed SSHX to {sshx_path}{RESET}")
-                
-                # Check version
-                version = subprocess.check_output([sshx_path, '--version'], text=True).strip()
-                print(f"{GREEN}SSHX version: {version}{RESET}")
-            else:
-                print(f"{RED}Could not find sshx in the extracted files{RESET}")
-        except Exception as e:
-            print(f"{RED}Failed to extract and install SSHX: {str(e)}{RESET}")
-    
-    # Clean up temp directory
-    try:
-        import shutil
-        shutil.rmtree(tmp_dir)
-    except:
-        pass
 
 def create_ssh_config():
     """Create a basic SSH config file if one doesn't exist"""
@@ -213,47 +158,300 @@ Host *
     except Exception as e:
         print(f"{RED}Failed to create SSH config: {str(e)}{RESET}")
 
-def test_ssh_connectivity():
+def create_terminal_access_script():
+    """Create a script to start a terminal service in the notebook"""
+    terminal_script = os.path.join(HOME, 'start_terminal.py')
+    try:
+        with open(terminal_script, 'w') as f:
+            f.write("""#!/usr/bin/env python3
+import os
+import socket
+import subprocess
+import threading
+import time
+import sys
+
+# Get free port
+def get_free_port():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+# Get your public IP
+hostname = socket.gethostname()
+try:
+    local_ip = socket.gethostbyname(hostname)
+except:
+    local_ip = "127.0.0.1"  # Fallback
+
+ssh_port = get_free_port()
+print(f"Starting terminal service on {local_ip}:{ssh_port}")
+
+# Setup SSH configuration
+ssh_dir = os.path.expanduser("~/.ssh")
+if not os.path.exists(ssh_dir):
+    os.makedirs(ssh_dir, mode=0o700)
+
+# Add public key to authorized_keys if it exists
+key_file = os.path.join(ssh_dir, 'id_rsa.pub')
+if os.path.exists(key_file):
+    with open(key_file, 'r') as f:
+        pubkey = f.read().strip()
+    
+    auth_keys = os.path.join(ssh_dir, 'authorized_keys')
+    with open(auth_keys, 'w') as f:
+        f.write(pubkey + "\\n")
+    
+    os.chmod(auth_keys, 0o600)
+    print(f"Added your public key to {auth_keys}")
+
+# Try different terminal methods
+methods = ['tty-share', 'ttyd', 'shellinabox', 'sshd']
+success = False
+
+for method in methods:
+    if method == 'tty-share' and subprocess.call(['which', 'tty-share'], stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0:
+        print("Starting terminal with tty-share...")
+        try:
+            subprocess.Popen(['tty-share', '-p', str(ssh_port)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print(f"Terminal ready at: http://{local_ip}:{ssh_port}")
+            success = True
+            break
+        except Exception as e:
+            print(f"Failed to start tty-share: {e}")
+    
+    elif method == 'ttyd' and subprocess.call(['which', 'ttyd'], stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0:
+        print("Starting terminal with ttyd...")
+        try:
+            subprocess.Popen(['ttyd', '-p', str(ssh_port), 'bash'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print(f"Terminal ready at: http://{local_ip}:{ssh_port}")
+            success = True
+            break
+        except Exception as e:
+            print(f"Failed to start ttyd: {e}")
+    
+    elif method == 'shellinabox' and subprocess.call(['which', 'shellinaboxd'], stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0:
+        print("Starting terminal with shellinabox...")
+        try:
+            subprocess.Popen(['shellinaboxd', '--no-beep', '-p', str(ssh_port), '-t'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print(f"Terminal ready at: http://{local_ip}:{ssh_port}")
+            success = True
+            break
+        except Exception as e:
+            print(f"Failed to start shellinabox: {e}")
+    
+    elif method == 'sshd' and subprocess.call(['which', 'sshd'], stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0:
+        print("Starting SSH server...")
+        # Create a minimal sshd_config
+        config_path = os.path.expanduser("~/sshd_config")
+        with open(config_path, "w") as f:
+            f.write(f'''Port {ssh_port}
+ListenAddress 0.0.0.0
+HostKey {os.path.expanduser("~/.ssh/id_rsa")}
+PubkeyAuthentication yes
+PasswordAuthentication no
+AuthorizedKeysFile {os.path.expanduser("~/.ssh/authorized_keys")}
+Subsystem sftp internal-sftp
+''')
+        try:
+            proc = subprocess.Popen(['sshd', '-f', config_path, '-D'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print(f"SSH server started. Connect with: ssh -p {ssh_port} {os.getlogin()}@{local_ip}")
+            print("Use your private key for authentication.")
+            success = True
+            break
+        except Exception as e:
+            print(f"Failed to start sshd: {e}")
+
+if not success:
+    # Create a Python-based shell if no other method works
+    print("No terminal service available. Creating a simple Python shell...")
+    
+    import code
+    import readline
+    import rlcompleter
+    
+    # Setup tab completion
+    readline.parse_and_bind("tab: complete")
+    
+    # Start a Python shell
+    print("Python shell started. You can run commands with os.system() or subprocess.")
+    print("For example: import os; os.system('ls -la')")
+    code.interact(local=locals())
+
+print("Press Ctrl+C to stop the service")
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("Terminal service stopped")
+""")
+        
+        os.chmod(terminal_script, 0o755)
+        print(f"{GREEN}Terminal access script created at {terminal_script}{RESET}")
+        print(f"{YELLOW}Run it with: !python3 ~/start_terminal.py{RESET}")
+        return True
+    except Exception as e:
+        print(f"{RED}Failed to create terminal script: {str(e)}{RESET}")
+        return False
+
+def test_github_connectivity():
     """Test SSH connectivity to GitHub"""
     print("\nTesting SSH connectivity to GitHub...")
     try:
-        result = subprocess.run(
+        # Using subprocess.call instead of run for Python 3.6 compatibility
+        result = subprocess.call(
             ['ssh', '-T', 'git@github.com', '-o', 'StrictHostKeyChecking=no'],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=10
+            stderr=subprocess.PIPE
         )
         
-        if "successfully authenticated" in result.stderr:
+        if result == 1:  # GitHub returns 1 for successful authentication
             print(f"{GREEN}SSH connection to GitHub successful!{RESET}")
             return True
         else:
-            print(f"{YELLOW}SSH connection test output: {result.stderr}{RESET}")
+            print(f"{YELLOW}SSH connection test returned code: {result}{RESET}")
             return False
     except Exception as e:
         print(f"{RED}SSH connection test failed: {str(e)}{RESET}")
         return False
 
-def setup_sshx_tunnel(port=8022):
-    """Set up an SSH tunnel using SSHX"""
-    sshx_path = os.path.join(BIN_DIR, 'sshx')
-    if not os.path.exists(sshx_path):
-        print(f"{RED}SSHX not installed, cannot set up tunnel{RESET}")
-        return
+def create_git_setup():
+    """Set up Git configuration"""
+    try:
+        # Check if git is available
+        if subprocess.call(['which', 'git'], stdout=subprocess.PIPE, stderr=subprocess.PIPE) != 0:
+            print(f"{YELLOW}Git not found in PATH. Skipping Git setup.{RESET}")
+            return False
+        
+        # Set up Git configuration
+        print("\nSetting up Git configuration...")
+        username = getpass.getuser()
+        hostname = socket.gethostname()
+        
+        subprocess.call(['git', 'config', '--global', 'user.name', username])
+        subprocess.call(['git', 'config', '--global', 'user.email', f"{username}@{hostname}"])
+        
+        # Set up SSH for Git
+        subprocess.call(['git', 'config', '--global', 'core.sshCommand', 'ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no'])
+        
+        print(f"{GREEN}Git configured successfully{RESET}")
+        return True
+    except Exception as e:
+        print(f"{RED}Failed to set up Git: {str(e)}{RESET}")
+        return False
+
+def create_ssh_tunnel_script():
+    """Create an SSH tunnel script using pure Python"""
+    tunnel_script = os.path.join(HOME, 'ssh_tunnel.py')
+    try:
+        with open(tunnel_script, 'w') as f:
+            f.write("""#!/usr/bin/env python3
+import sys
+import socket
+import threading
+import time
+import os
+
+def print_usage():
+    print("SSH Tunnel - Pure Python Implementation")
+    print("Usage:")
+    print("  python ssh_tunnel.py local_port remote_host remote_port")
+    print("Example:")
+    print("  python ssh_tunnel.py 8080 example.com 80")
+    print("  This will forward localhost:8080 to example.com:80")
+    sys.exit(1)
+
+if len(sys.argv) != 4:
+    print_usage()
+
+local_port = int(sys.argv[1])
+remote_host = sys.argv[2]
+remote_port = int(sys.argv[3])
+
+print(f"Starting SSH tunnel: localhost:{local_port} -> {remote_host}:{remote_port}")
+
+def handle_client(client_socket, remote_host, remote_port):
+    remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        remote_socket.connect((remote_host, remote_port))
+        
+        # Configure sockets for non-blocking operation
+        client_socket.setblocking(False)
+        remote_socket.setblocking(False)
+        
+        client_data = b""
+        remote_data = b""
+        
+        while True:
+            # Check for client -> remote data
+            try:
+                data = client_socket.recv(4096)
+                if not data:
+                    break
+                remote_socket.sendall(data)
+            except BlockingIOError:
+                pass
+            except:
+                break
+                
+            # Check for remote -> client data
+            try:
+                data = remote_socket.recv(4096)
+                if not data:
+                    break
+                client_socket.sendall(data)
+            except BlockingIOError:
+                pass
+            except:
+                break
+                
+            time.sleep(0.01)  # Small sleep to reduce CPU usage
+    except Exception as e:
+        print(f"Connection error: {e}")
+    finally:
+        client_socket.close()
+        remote_socket.close()
+
+def main():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     
-    print(f"\n{CYAN}SSHX Tunneling Options:{RESET}")
-    print(f"To create a tunnel, run the following command in a new cell:")
-    print(f"{GREEN}!{sshx_path} create --name my-tunnel{RESET}")
-    
-    print(f"\nTo list your tunnels:")
-    print(f"{GREEN}!{sshx_path} list{RESET}")
-    
-    print(f"\nTo connect to a tunnel:")
-    print(f"{GREEN}!{sshx_path} connect my-tunnel{RESET}")
-    
-    print(f"\nFor reverse tunneling (allow connections to this notebook):")
-    print(f"{GREEN}!{sshx_path} serve --port {port}{RESET}")
+    try:
+        server.bind(('0.0.0.0', local_port))
+        server.listen(5)
+        print(f"Listening on localhost:{local_port}")
+        
+        while True:
+            client_sock, addr = server.accept()
+            print(f"Received connection from {addr[0]}:{addr[1]}")
+            
+            client_handler = threading.Thread(
+                target=handle_client,
+                args=(client_sock, remote_host, remote_port)
+            )
+            client_handler.daemon = True
+            client_handler.start()
+            
+    except KeyboardInterrupt:
+        print("Tunnel stopped by user")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        server.close()
+
+if __name__ == "__main__":
+    main()
+""")
+        
+        os.chmod(tunnel_script, 0o755)
+        print(f"{GREEN}SSH tunnel script created at {tunnel_script}{RESET}")
+        print(f"{YELLOW}Run it with: !python3 ~/ssh_tunnel.py local_port remote_host remote_port{RESET}")
+        return True
+    except Exception as e:
+        print(f"{RED}Failed to create tunnel script: {str(e)}{RESET}")
+        return False
 
 def print_instructions():
     """Print usage instructions"""
@@ -276,16 +474,20 @@ def print_instructions():
     
     print(f"\n{YELLOW}Git Commands:{RESET}")
     print(f"  Clone a private repository:       {GREEN}!git clone git@github.com:username/repo.git{RESET}")
+    print(f"  Clone with explicit key:          {GREEN}!GIT_SSH_COMMAND=\"ssh -i ~/.ssh/id_rsa\" git clone git@github.com:username/repo.git{RESET}")
     
-    sshx_path = os.path.join(BIN_DIR, 'sshx')
-    if os.path.exists(sshx_path):
-        print(f"\n{YELLOW}SSHX Commands:{RESET}")
-        print(f"  Create a tunnel:                  {GREEN}!{sshx_path} create --name my-tunnel{RESET}")
-        print(f"  Connect to a tunnel:              {GREEN}!{sshx_path} connect my-tunnel{RESET}")
-        print(f"  Serve this notebook (rev tunnel): {GREEN}!{sshx_path} serve --port 8022{RESET}")
+    print(f"\n{YELLOW}Terminal Access:{RESET}")
+    print(f"  Start a terminal service:         {GREEN}!python3 ~/start_terminal.py{RESET}")
+    
+    print(f"\n{YELLOW}SSH Tunneling:{RESET}")
+    print(f"  Create a tunnel:                  {GREEN}!python3 ~/ssh_tunnel.py 8080 example.com 80{RESET}")
     
     print(f"\n{YELLOW}To modify SSH config:{RESET}")
     print(f"  Edit the file at:                 {GREEN}{os.path.join(SSH_DIR, 'config')}{RESET}")
+    
+    print(f"\n{YELLOW}Your private key location:{RESET}")
+    print(f"  Private key:                      {GREEN}{os.path.join(SSH_DIR, 'id_rsa')}{RESET}")
+    print(f"  Public key:                       {GREEN}{os.path.join(SSH_DIR, 'id_rsa.pub')}{RESET}")
     
     print(f"\n{CYAN}{'='*70}{RESET}")
     print(f"{CYAN}                       Setup Complete{RESET}")
@@ -297,9 +499,10 @@ def main():
     setup_directory_structure()
     generate_ssh_key()
     create_ssh_config()
-    install_sshx()
-    test_ssh_connectivity()
-    setup_sshx_tunnel()
+    create_terminal_access_script()
+    create_ssh_tunnel_script()
+    create_git_setup()
+    test_github_connectivity()
     print_instructions()
 
 if __name__ == "__main__":
